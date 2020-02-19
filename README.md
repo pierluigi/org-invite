@@ -12,7 +12,7 @@ GH_PAT=YOUR_PAT_GOES_HERE
 GH_USER=octocat
 GH_ORG=github
 ```
-
+You will need to be an owner of the organization and the PAT will need read/write access to the Org permission scope.
 To run the first time:
 ```
 npm install # do this only once
