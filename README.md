@@ -2,6 +2,8 @@
 
 Use this script send invites in bulk to join a team (new or existing) under an organization on GitHub.
 
+![Screenshot](screenshot.png?raw=true "Script in action")
+
 # Instructions
 
 Checkout this repo and make sure you're using Node v10 or more recent. 
