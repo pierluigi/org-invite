@@ -25,162 +25,162 @@ program.option(
   "Organization name (leave blank for prompt or set $GH_ORG)"
 );
 
+program.option("-t, --team <team>", "Team slug");
+
 program.parse(process.argv);
-const showArtifacts = async ({ owner, repo, PAT }) => {
-  var loader = ["/ Loading", "| Loading", "\\ Loading", "- Loading"];
-  var i = 4;
-  var ui = new inquirer.ui.BottomBar({ bottomBar: loader[i % 4] });
 
-  const loadingInterval = setInterval(() => {
-    ui.updateBottomBar(loader[i++ % 4]);
-  }, 200);
+let teamExists = false;
+let teamId = 0;
+let teamUrl = null;
+let teamSlug = null;
 
-  const octokit = new Octokit({
-    auth: PAT
-  });
+var octokit;
 
-  const prefs = { owner, repo };
-  ui.log.write(`${chalk.dim("[1/3]")} 🔍 Getting list of workflows...`);
+const findTeam = async ({ owner, org, team }) => {
+  var ui = new inquirer.ui.BottomBar();
 
-  const {
-    data: { workflows }
-  } = await octokit.actions.listRepoWorkflows({ ...prefs });
+  // UI
+  // var i = 4;
+  // var loader = ["/ Loading", "| Loading", "\\ Loading", "- Loading"];
+  // var ui = new inquirer.ui.BottomBar({ bottomBar: loader[0] });
 
-  let everything = {};
-
-  ui.log.write(`${chalk.dim("[2/3]")} 🏃‍♀️ Getting list of workflow runs...`);
-
-  let runs = await workflows.reduce(async (promisedRuns, w) => {
-    const memo = await promisedRuns;
-
-    const {
-      data: { workflow_runs }
-    } = await octokit.actions.listWorkflowRuns({ ...prefs, workflow_id: w.id });
-
-    everything[w.id] = {
-      name: w.name,
-      id: w.id,
-      updated_at: w.updated_at,
-      state: w.updated_at,
-      runs: workflow_runs.reduce(
-        (r, { id, run_number, status, conclusion, html_url }) => {
-          return {
-            ...r,
-            [id]: {
-              id,
-              workflow_id: w.id,
-              run_number,
-              status,
-              conclusion,
-              html_url,
-              artifacts: []
-            }
-          };
-        },
-        {}
-      )
-    };
-
-    if (!workflow_runs.length) return memo;
-    return [...memo, ...workflow_runs];
-  }, []);
+  // const loadingInterval = setInterval(() => {
+  //   ui.updateBottomBar(loader[i++ % 4]);
+  // }, 200);
 
   ui.log.write(
-    `${chalk.dim(
-      "[3/3]"
-    )} 📦 Getting list of artifacts for each run... (this may take a while)`
+    `${chalk.dim("[1/3]")} Verifying team ${chalk.green(team)} exists...`
   );
 
-  let all_artifacts = await runs.reduce(async (promisedArtifact, r) => {
-    const memo = await promisedArtifact;
-
-    const {
-      data: { artifacts }
-    } = await octokit.actions.listWorkflowRunArtifacts({
-      ...prefs,
-      run_id: r.id
-    });
-
-    if (!artifacts.length) return memo;
-
-    const run_wf = _.find(everything, wf => wf.runs[r.id] != undefined);
-    if (run_wf && everything[run_wf.id]) {
-      everything[run_wf.id].runs[r.id].artifacts = artifacts;
+  try {
+    // clearInterval(loadingInterval);
+    var { data } = await octokit.teams.getByName({ org, team_slug: team });
+  } catch (e) {
+    // clearInterval(loadingInterval);
+    if (e.status === 404) {
+      teamExists = false;
     }
+  }
 
-    return [...memo, ...artifacts];
-  }, []);
+  if (
+    _.get(data, "organization", false) &&
+    _.get(data, "organization.login", false) === org
+  ) {
+    teamExists = true;
+    teamId = data.id;
+    teamUrl = data.html_url;
+    teamSlug = data.slug;
+  }
 
-  let output = [];
-  _.each(everything, wf => {
-    _.each(wf.runs, ({ run_number, artifacts }) => {
-      _.each(artifacts, ({ id, name, size_in_bytes, created_at }) => {
-        output.push({
-          name,
-          artifact_id: id,
-          size: prettyBytes(size_in_bytes),
-          size_in_bytes,
-          created: moment(created_at).format("dddd, MMMM Do YYYY, h:mm:ss a"),
-          created_at,
-          run_number,
-          workflow: wf.name
-        });
-      });
-    });
-  });
+  if (teamExists) {
+    ui.log.write(`${chalk.dim("[2/3]")} Team ${chalk.green(team)} found.`);
+  }
+};
 
-  const out = _.orderBy(output, ["size_in_bytes"], ["desc"]);
-  clearInterval(loadingInterval);
+async function createTeam({ owner, org, team }) {
+  if (teamExists) return;
 
-  inquirer
+  var ui = new inquirer.ui.BottomBar();
+
+  ui.log.write(`${chalk.dim("[2/3]")} Team ${chalk.green(team)} not found. `);
+
+  await inquirer
     .prompt([
       {
-        type: "checkbox",
-        name: "artifact_ids",
-        message: "Select the artifacts you want to delete",
-        choices: output.map((row, k) => ({
-          name: `${row.workflow} - ${row.name}, ${row.size} (${row.created}, ID: ${row.artifact_id}, Run #: ${row.run_number})`,
-          value: row.artifact_id
-        }))
+        type: "confirm",
+        name: "createTeam",
+        message: `Create it now?`
+      },
+      {
+        type: "input",
+        name: "newTeamName",
+        default: function() {
+          return program.team;
+        },
+        message: "Team name",
+        when: function({ createTeam }) {
+          return createTeam;
+        }
+      },
+      {
+        type: "input",
+        name: "teamDescription",
+        message: "Team description",
+        when: function({ createTeam }) {
+          return createTeam;
+        }
       }
     ])
-    .then(answers => {
-      if (answers.artifact_ids.length == 0) {
+    .then(async function({ createTeam, newTeamName, teamDescription }) {
+      if (!createTeam) {
         process.exit();
-      }
-
-      inquirer
-        .prompt([
-          {
-            type: "confirm",
-            name: "delete",
-            message: `You are about to delete ${answers.artifact_ids.length} artifacts permanently. Are you sure?`
-          }
-        ])
-        .then(confirm => {
-          if (!confirm.delete) process.exit();
-
-          answers.artifact_ids.map(aid => {
-            octokit.actions
-              .deleteArtifact({ ...prefs, artifact_id: aid })
-              .then(r => {
-                console.log(
-                  r.status === 204
-                    ? `${chalk.green("[OK]")} Artifact with ID ${chalk.dim(
-                        aid
-                      )} deleted`
-                    : `${chalk.red("[ERR]")} Artifact with ID ${chalk.dim(
-                        aid
-                      )} could not be deleted.`
-                );
-              })
-              .catch(e => {
-                console.error(e.status, e.message);
-              });
-          });
+      } else {
+        var {
+          data: { id, html_url, slug }
+        } = await octokit.teams.create({
+          org,
+          name: newTeamName,
+          privacy: "secret",
+          description: teamDescription
         });
+
+        teamExists = true;
+        teamId = id;
+        teamUrl = html_url;
+        teamSlug = slug;
+      }
     });
-};
+}
+
+async function inviteMembers({ org, team }) {
+  var ui = new inquirer.ui.BottomBar();
+
+  await inquirer
+    .prompt([
+      {
+        type: "editor",
+        name: "csv",
+        message: "Provide a comma separated list of usernames or email"
+      }
+    ])
+    .then(async ({ csv }) => {
+      const invitees = csv.split(",").map(i => i.trim());
+
+      ui.log.write(
+        `${chalk.dim("[3/3]")} Sending invitation to ${chalk.yellow(
+          invitees.length
+        )} users:`
+      );
+
+      ui.log.write(chalk.yellow("- " + invitees.join("\n- ")));
+
+      const invites = await invitees.reduce(async (promisedRuns, i) => {
+        const memo = await promisedRuns;
+
+        if (i.indexOf("@") > -1) {
+          // assume valid email
+          const res = await octokit.orgs.createInvitation({
+            org,
+            team_ids: [teamId],
+            email: i
+          });
+        } else {
+          // assume valid username
+          const res = await octokit.teams.addOrUpdateMembershipInOrg({
+            org,
+            team_slug: teamSlug,
+            username: i
+          });
+        }
+
+        // TODO what to return?
+        return memo;
+      }, []);
+
+      ui.log.write(`${chalk.dim("[OK]")} Done. Review invitations at:`);
+      ui.log.write(teamUrl);
+    });
+}
 
 inquirer
   .prompt([
@@ -202,13 +202,36 @@ inquirer
     },
     {
       type: "input",
-      name: "repo",
-      message: "Which repository?",
+      name: "org",
+      message: "Which organization?",
       default: function() {
-        return program.repo;
+        return program.org || process.env.GH_ORG;
+      }
+    },
+    {
+      type: "input",
+      name: "team",
+      message: "Which team?",
+      suffix:
+        " (provide the slug of an existing team, or the full name of the team being created)",
+      validate: function(value) {
+        return value.length > 3
+          ? true
+          : "Please provide at least 4 characters.";
+      },
+      default: function() {
+        return program.team;
       }
     }
   ])
-  .then(answers => {
-    showArtifacts({ ...answers });
+  .then(async function(answers) {
+    octokit = new Octokit({
+      auth: answers.PAT
+    });
+
+    await findTeam({ ...answers });
+    await createTeam({ ...answers });
+    await inviteMembers({ ...answers });
+
+    process.exit();
   });
